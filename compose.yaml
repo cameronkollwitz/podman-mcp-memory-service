@@ -1,0 +1,41 @@
+name: mcp-memory
+
+services:
+  mcp-memory:
+    image: docker.io/doobidoo/mcp-memory-service:11.14.0
+    container_name: mcp-memory
+    restart: always
+    env_file: core.env
+    ports:
+      - "8765:8765"
+    volumes:
+      - mcp-memory:/app/sqlite_db
+      - mcp-models:/root/.cache
+      - mcp-backups-core:/app/backups
+
+  mcp-memory-ui:
+    image: docker.io/doobidoo/mcp-memory-service:11.14.0
+    container_name: mcp-memory-ui
+    # Runs "memory server --http" (dashboard + REST API), as the old container did.
+    entrypoint: ["memory"]
+    command: ["server", "--http"]
+    restart: always
+    env_file: ui.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - mcp-memory:/app/sqlite_db
+      - mcp-models:/root/.cache
+      - mcp-backups-ui:/app/backups
+
+# All volumes already exist. "external" stops compose from creating new,
+# empty volumes with a project-name prefix.
+volumes:
+  mcp-memory:
+    external: true
+  mcp-models:
+    external: true
+  mcp-backups-core:
+    external: true
+  mcp-backups-ui:
+    external: true
