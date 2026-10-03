@@ -72,7 +72,10 @@ The image is versioned by someone else, so what is remembered about its variable
 storage was true of some version. Read the version that is running: the image tag in
 `compose.yaml`, `podman exec mcp-memory memory --help`, or the upstream README at the matching tag.
 An image bump changes the tag in both services together, and the stack is brought up and checked
-with a `memory_search` call afterwards.
+with a `memory_search` call afterwards. Dependabot opens a weekly pull request when a new tag is
+published. The `check` workflow on that pull request only validates the compose file, so the
+branch is checked out, brought up with `podman compose up -d` and checked with `memory_search`
+before it is merged.
 
 ## Git
 
