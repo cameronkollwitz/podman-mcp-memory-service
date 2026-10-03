@@ -24,11 +24,16 @@ the tail of its log.
 
 ## Use the memory server
 
-At the start of a session, search for memories tagged `podman-mcp-memory-service` before replying,
-and store decisions, conventions, gotchas and preferences as they come up. Every memory stored from
-this repository carries that tag beside a type tag (`decision`, `convention`, `gotcha` or
-`preference`). A memory recording how the operator wants work done also carries `standing`, and
-those are loaded with `tags: ["podman-mcp-memory-service", "standing"]` and `tag_match: "all"`.
+Before the first reply and before any other tool call, load the standing memories: a memory
+recording how the operator wants work done carries the `standing` tag. Call `memory_search` with
+`tags: ["podman-mcp-memory-service", "standing"]`, `tag_match: "all"`, `limit: 100` and
+`max_response_chars: 60000`, and read every result. `memory_search` returns 10 results unless
+`limit` is set, and it gives no sign that more exist. Load them again after a context compaction.
+
+Then search for task context by the repository tag, and store decisions, conventions, gotchas and
+preferences as they come up. Every memory stored from this repository carries the
+`podman-mcp-memory-service` tag beside a type tag (`decision`, `convention`, `gotcha` or
+`preference`), and `standing` as well when it records how the operator wants work done.
 
 **Search by tag and exact phrase before concluding nothing was recorded.** A semantic search can
 return another repository's record first, so pair `mode: exact` with
