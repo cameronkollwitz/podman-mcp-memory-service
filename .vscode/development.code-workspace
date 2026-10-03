@@ -1,0 +1,36 @@
+{
+  "folders": [
+    {
+      "path": ".."
+    }
+  ],
+  "settings": {
+    // Duplicated from .vscode/settings.json, and the duplication is forced rather than
+    // careless. The containers.* settings are machine-overridable and the
+    // powershell.codeFormatting.preset setting is window-scoped, so a folder's settings.json
+    // cannot apply them while a workspace file is open, and a workspace file is not read when
+    // the folder is opened directly. Covering both entry points takes both copies.
+    "containers.containerClient": "com.microsoft.visualstudio.containers.podman",
+    "containers.orchestratorClient": "com.microsoft.visualstudio.orchestrators.podmancompose",
+    "powershell.codeFormatting.preset": "Stroustrup",
+    // The built-in dotenv language matches core.env but not core.env.example.
+    "files.associations": {
+      "*.env.example": "dotenv"
+    },
+    "[yaml]": {
+      "editor.tabSize": 2,
+      "editor.insertSpaces": true
+    },
+    "[powershell]": {
+      "editor.tabSize": 4,
+      "editor.insertSpaces": true
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-azuretools.vscode-containers",
+      "ms-vscode.powershell",
+      "redhat.vscode-yaml"
+    ]
+  }
+}
