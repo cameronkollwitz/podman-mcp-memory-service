@@ -7,7 +7,7 @@ services:
     restart: always
     env_file: core.env
     ports:
-      - "8765:8765"
+      - "127.0.0.1:8765:8765"
     volumes:
       - mcp-memory:/app/sqlite_db
       - mcp-models:/root/.cache
@@ -22,7 +22,7 @@ services:
     restart: always
     env_file: ui.env
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - mcp-memory:/app/sqlite_db
       - mcp-models:/root/.cache
