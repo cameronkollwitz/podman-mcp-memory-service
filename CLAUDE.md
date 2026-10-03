@@ -1,8 +1,9 @@
 # podman-mcp-memory-service
 
-A Podman compose stack that runs `doobidoo/mcp-memory-service` 11.14.0 on this Windows machine.
-It is the memory server every Claude Code session on the machine uses, this repository's included,
-so a change here can take memory away from all of them at once.
+A Podman compose stack that runs `doobidoo/mcp-memory-service` 11.14.0 on a Windows machine. Once
+Claude Code is registered against it, it is the memory server for every Claude Code session on that
+machine, this repository's included, so a change here can take memory away from all of them at
+once.
 
 ## What runs
 
@@ -15,8 +16,7 @@ so a change here can take memory away from all of them at once.
 
 Both mount the volumes `mcp-memory` (the SQLite database) and `mcp-models` (the model cache), and
 each has its own backups volume. All four volumes are `external`, so compose never creates them.
-The storage backend is `hybrid`: SQLite in the
-volume, synchronized to Cloudflare D1 and Vectorize.
+The storage backend is `hybrid`: SQLite in the volume, synchronized to Cloudflare D1 and Vectorize.
 
 Podman has no daemon, so `restart: always` does not bring the stack back after a reboot.
 `mcp-memory-autostart.ps1` installs a logon task that does, and `-Status` reports its last run and
@@ -24,15 +24,15 @@ the tail of its log.
 
 ## Use the memory server
 
-The operator's global instructions set the procedure: load the standing memories before the first
-reply, search for task context, and store decisions, conventions, gotchas and preferences. This
-repository's tag is `podman-mcp-memory-service`, and every memory stored here carries it beside a
-type tag. A memory recording how the operator wants work done also carries `standing`.
+At the start of a session, search for memories tagged `podman-mcp-memory-service` before replying,
+and store decisions, conventions, gotchas and preferences as they come up. Every memory stored from
+this repository carries that tag beside a type tag (`decision`, `convention`, `gotcha` or
+`preference`). A memory recording how the operator wants work done also carries `standing`, and
+those are loaded with `tags: ["podman-mcp-memory-service", "standing"]` and `tag_match: "all"`.
 
-**Search by tag and exact phrase before concluding nothing was recorded.** On 2026-09-23 a
-semantic search returned another repository's record first, so
-pair `mode: exact` with `tags: ["podman-mcp-memory-service"]`, and use a semantic query only to
-widen the search after that.
+**Search by tag and exact phrase before concluding nothing was recorded.** A semantic search can
+return another repository's record first, so pair `mode: exact` with
+`tags: ["podman-mcp-memory-service"]`, and use a semantic query only to widen the search after that.
 
 **Memory goes to the server and never to a file.** The harness offers a file-based memory directory
 and `MEMORY.md`; neither takes a write in this repository.
@@ -73,9 +73,8 @@ with a `memory_search` call afterwards.
 
 `main` is the only branch, and it pushes to `origin` on GitHub. Commit and push when the operator
 asks. **No agent authorship**: commit messages and pull request bodies carry no
-`Co-Authored-By: Claude` or generated-with line, matching the operator's other
-repositories. `.claude/settings.json` sets both attribution strings empty, which stops the harness
-asking for them.
+`Co-Authored-By: Claude` or generated-with line. `.claude/settings.json` sets both attribution
+strings empty, which stops the harness asking for them.
 
 ## Editor
 
