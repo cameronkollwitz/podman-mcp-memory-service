@@ -74,7 +74,8 @@ with a `memory_search` call afterwards.
 `main` is the only branch, and it pushes to `origin` on GitHub. Commit and push when the operator
 asks. **No agent authorship**: commit messages and pull request bodies carry no
 `Co-Authored-By: Claude` or generated-with line, matching the operator's other
-repositories. Commit `851b673` carries one from before this file existed.
+repositories. `.claude/settings.json` sets both attribution strings empty, which stops the harness
+asking for them.
 
 ## Editor
 
