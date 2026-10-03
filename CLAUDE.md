@@ -77,7 +77,8 @@ with a `memory_search` call afterwards.
 ## Git
 
 `main` is the only branch, and it pushes to `origin` on GitHub. Commit and push when the operator
-asks. **No agent authorship**: commit messages and pull request bodies carry no
+asks. A GitHub ruleset blocks force pushes to `main` and deleting it, so a history rewrite needs
+the operator to disable the ruleset first. Commits are signed. **No agent authorship**: commit messages and pull request bodies carry no
 `Co-Authored-By: Claude` or generated-with line. `.claude/settings.json` sets both attribution
 strings empty, which stops the harness asking for them.
 

@@ -12,7 +12,7 @@
 
 .EXAMPLE
     .\mcp-memory-autostart.ps1 -Install -StackPath 'D:\stacks\mcp-memory' -RunNow
-    
+
     .\mcp-memory-autostart.ps1 -Install -RunNow   # create the task and run it once
     .\mcp-memory-autostart.ps1 -Status            # last run, result code, recent log lines
     .\mcp-memory-autostart.ps1 -Uninstall         # remove the task
