@@ -1,0 +1,41 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # env_file entries must exist for compose to load the file, so the
+      # templates stand in for the live env files, which are never committed.
+      - run: |
+          cp core.env.example core.env
+          cp ui.env.example ui.env
+          docker compose config --quiet
+
+  powershell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # PSAvoidUsingWriteHost: the script is run by hand and writes status for a person to read.
+      # PSReviewUnusedParameter: -Install, -Uninstall and -Status only select a parameter set.
+      - shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+              Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          }
+          $findings = Invoke-ScriptAnalyzer -Path ./mcp-memory-autostart.ps1 `
+              -ExcludeRule PSAvoidUsingWriteHost, PSReviewUnusedParameter
+          $findings | Format-Table -AutoSize RuleName, Severity, Line, Message
+          if ($findings) { exit 1 }

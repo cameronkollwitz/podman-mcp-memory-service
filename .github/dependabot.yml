@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Both services pin the same image tag, so one pull request bumps both.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
