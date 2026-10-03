@@ -1,5 +1,7 @@
 # podman-mcp-memory-service
 
+[![check](https://github.com/cameronkollwitz/podman-mcp-memory-service/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/cameronkollwitz/podman-mcp-memory-service/actions/workflows/check.yml)
+
 A Podman compose stack that runs [doobidoo/mcp-memory-service](https://github.com/doobidoo/mcp-memory-service)
 11.14.0 on Windows, with a logon task that starts it after a reboot. It gives Claude Code a
 persistent memory server over MCP.
