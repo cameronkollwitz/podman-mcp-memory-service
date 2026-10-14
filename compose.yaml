@@ -2,7 +2,7 @@ name: mcp-memory
 
 services:
   mcp-memory:
-    image: docker.io/doobidoo/mcp-memory-service:11.14.0
+    image: docker.io/doobidoo/mcp-memory-service:11.15.0
     container_name: mcp-memory
     restart: always
     env_file: core.env
@@ -14,7 +14,7 @@ services:
       - mcp-backups-core:/app/backups
 
   mcp-memory-ui:
-    image: docker.io/doobidoo/mcp-memory-service:11.14.0
+    image: docker.io/doobidoo/mcp-memory-service:11.15.0
     container_name: mcp-memory-ui
     # Runs "memory server --http" (dashboard + REST API), as the old container did.
     entrypoint: ["memory"]
