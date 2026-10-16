@@ -63,6 +63,12 @@ Podman has no daemon, so `restart: always` does not bring the containers back af
 waits for it to respond and runs `podman compose up -d`. Each run appends to
 `%LOCALAPPDATA%\mcp-memory-autostart.log`.
 
+After an unclean shutdown, a socket file left in `%TEMP%\podman` can stop Podman's API pipe from
+opening, and compose then fails with `open //./pipe/podman-machine-default: The system cannot find
+the file specified`. The task checks for the pipe and, when it is missing, removes that socket file
+and restarts the machine. Its result code is compose's exit code, 1 when Podman did not respond in
+time, or 2 when the pipe is still missing after the restart, so `-Status` shows a failed run.
+
 ```powershell
 .\mcp-memory-autostart.ps1 -Install -RunNow   # create the task and run it once
 .\mcp-memory-autostart.ps1 -Status            # last run, result code, recent log lines

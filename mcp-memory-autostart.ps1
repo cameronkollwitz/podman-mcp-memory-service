@@ -10,6 +10,11 @@
     "podman compose up -d" in the stack folder. Output from each run is
     appended to a log file.
 
+    If the machine's API pipe is missing, the task removes the machine's API
+    socket file and restarts the machine before running compose. The task's
+    result code is compose's exit code, 1 when Podman did not respond in time,
+    or 2 when the pipe is still missing after the restart.
+
 .EXAMPLE
     .\mcp-memory-autostart.ps1 -Install -StackPath 'D:\stacks\mcp-memory' -RunNow
 
@@ -73,20 +78,47 @@ switch ($PSCmdlet.ParameterSetName) {
 `$log = '$(& $esc $LogPath)'
 function Log(`$m) { "`$(Get-Date -Format s)  `$m" | Add-Content -Path `$log }
 
+function Wait-Podman {
+    `$deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while (`$true) {
+        & `$podman info *> `$null
+        if (`$LASTEXITCODE -eq 0) { return }
+        if ((Get-Date) -gt `$deadline) { Log 'Podman did not respond in time; giving up.'; exit 1 }
+        Start-Sleep -Seconds 3
+    }
+}
+
+# podman info answers over SSH, so it succeeds while the named pipe that
+# compose needs is missing. win-sshproxy creates the pipe and exits when a
+# socket file left by an unclean shutdown blocks its bind.
+function Test-Pipe {
+    `$deadline = (Get-Date).AddSeconds(15)
+    while (-not (Test-Path -LiteralPath `$pipe)) {
+        if ((Get-Date) -gt `$deadline) { return `$false }
+        Start-Sleep -Seconds 1
+    }
+    `$true
+}
+
 Log '--- logon start ---'
 & `$podman machine start *>&1 | ForEach-Object { Log `$_ }
+Wait-Podman
 
-`$deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-while (`$true) {
-    & `$podman info *> `$null
-    if (`$LASTEXITCODE -eq 0) { break }
-    if ((Get-Date) -gt `$deadline) { Log 'Podman did not respond in time; giving up.'; exit 1 }
-    Start-Sleep -Seconds 3
+`$pipe, `$sock = (& `$podman machine inspect --format '{{.ConnectionInfo.PodmanPipe.Path}}|{{.ConnectionInfo.PodmanSocket.Path}}') -split '\|'
+if (-not (Test-Pipe)) {
+    Log "API pipe `$pipe is missing; removing `$sock and restarting the machine."
+    & `$podman machine stop *>&1 | ForEach-Object { Log `$_ }
+    Remove-Item -LiteralPath `$sock -Force -ErrorAction SilentlyContinue
+    & `$podman machine start *>&1 | ForEach-Object { Log `$_ }
+    Wait-Podman
+    if (-not (Test-Pipe)) { Log "API pipe `$pipe is still missing; giving up."; exit 2 }
 }
 
 Set-Location -LiteralPath '$(& $esc $StackPath)'
 & `$podman compose up -d *>&1 | ForEach-Object { Log `$_ }
-Log "compose exit code: `$LASTEXITCODE"
+`$code = `$LASTEXITCODE
+Log "compose exit code: `$code"
+exit `$code
 "@
         # Encode the script so no path or quote can break the task's command line.
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($runScript))
