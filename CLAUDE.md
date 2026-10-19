@@ -1,6 +1,6 @@
 # podman-mcp-memory-service
 
-A Podman compose stack that runs `doobidoo/mcp-memory-service` 11.14.0 on a Windows machine. Once
+A Podman compose stack that runs `doobidoo/mcp-memory-service` 12.1.1 on a Windows machine. Once
 Claude Code is registered against it, it is the memory server for every Claude Code session on that
 machine, this repository's included, so a change here can take memory away from all of them at
 once.
