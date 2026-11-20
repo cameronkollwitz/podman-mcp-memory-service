@@ -98,15 +98,28 @@ function Wait-Podman {
 # desktop app) writes the connections file into the package's private copy of
 # AppData, so a port change made there never reaches the real file, and every
 # process outside the package keeps dialing the old port.
+# Only the machine's own two connections are rewritten, so other machines and
+# hand-added connections keep their ports. The file is read and written as
+# UTF-8 without a BOM, which is what Podman writes; Windows PowerShell 5.1
+# cmdlets would default to ANSI.
 function Sync-ConnectionPort {
-    `$port = (& `$podman machine inspect --format '{{.SSHConfig.Port}}' 2>`$null) | Select-Object -First 1
+    `$name, `$port = ((& `$podman machine inspect --format '{{.Name}}|{{.SSHConfig.Port}}' 2>`$null) |
+        Select-Object -First 1) -split '\|'
     `$file = Join-Path `$env:APPDATA 'containers\podman-connections.json'
-    if (-not `$port -or -not (Test-Path -LiteralPath `$file)) { return }
-    `$json = Get-Content -LiteralPath `$file -Raw
-    `$fixed = `$json -replace '@127\.0\.0\.1:\d+/', "@127.0.0.1:`$port/"
+    if (-not `$name -or `$port -notmatch '^\d+$' -or [int]`$port -le 0) { return }
+    if (-not (Test-Path -LiteralPath `$file)) { return }
+    `$json = [IO.File]::ReadAllText(`$file)
+    try { `$conns = (`$json | ConvertFrom-Json).Connection.Connections } catch { return }
+    `$fixed = `$json
+    foreach (`$n in @(`$name, "`$name-root")) {
+        `$c = `$conns.`$n
+        if (-not `$c -or -not `$c.IsMachine) { continue }
+        `$uri = `$c.URI -replace '^(ssh://[^@/]+@127\.0\.0\.1:)\d+/', ('`${1}' + `$port + '/')
+        if (`$uri -ne `$c.URI) { `$fixed = `$fixed.Replace('"' + `$c.URI + '"', '"' + `$uri + '"') }
+    }
     if (`$fixed -ne `$json) {
-        Log "Connection URIs did not match machine SSH port `$port; rewriting `$file."
-        Set-Content -LiteralPath `$file -Value `$fixed -NoNewline
+        Log "Connection URIs for `$name did not match machine SSH port `$port; rewriting `$file."
+        [IO.File]::WriteAllText(`$file, `$fixed, (New-Object Text.UTF8Encoding `$false))
     }
 }
 
@@ -164,9 +177,14 @@ exit `$code
         $action = New-ScheduledTaskAction -Execute $shell `
             -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encoded"
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+        # A run can wait for Podman three times (first start, SSH restart, pipe
+        # restart) and restart the machine twice before compose runs. The limit
+        # covers the three waits plus five minutes for restarts and compose, so
+        # Task Scheduler does not stop the run before it logs a result.
+        $limit = New-TimeSpan -Seconds ([Math]::Max(600, 3 * $TimeoutSeconds + 300))
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-            -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+            -StartWhenAvailable -ExecutionTimeLimit $limit
 
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
             -Principal $principal -Settings $settings `
