@@ -13,6 +13,8 @@
     Before waiting, the task rewrites the port in podman-connections.json when
     it differs from the machine's SSH port, which drifts when Podman was run
     from an MSIX-packaged app such as the Claude desktop app.
+    Each podman info call is stopped after 20 seconds, so a hung SSH connection
+    counts as no answer.
     If Podman does not answer within the timeout, the task stops and starts the
     machine once, which lets Podman move its SSH port when Windows has reserved
     the old one. If the machine's API pipe is missing, the task removes the
@@ -83,11 +85,31 @@ switch ($PSCmdlet.ParameterSetName) {
 `$log = '$(& $esc $LogPath)'
 function Log(`$m) { "`$(Get-Date -Format s)  `$m" | Add-Content -Path `$log }
 
+# A call operator would wait on podman info for as long as SSH hangs, past
+# Wait-Podman's deadline and up to the task's execution limit. The process is
+# stopped after 20 seconds instead. Both streams are read asynchronously so a
+# full pipe buffer cannot block the child.
+function Test-PodmanAnswers {
+    `$psi = New-Object Diagnostics.ProcessStartInfo `$podman, 'info --format {{.Host.Hostname}}'
+    `$psi.UseShellExecute = `$false
+    `$psi.CreateNoWindow = `$true
+    `$psi.RedirectStandardOutput = `$true
+    `$psi.RedirectStandardError = `$true
+    `$p = [Diagnostics.Process]::Start(`$psi)
+    `$null = `$p.StandardOutput.ReadToEndAsync()
+    `$null = `$p.StandardError.ReadToEndAsync()
+    if (-not `$p.WaitForExit(20000)) {
+        try { `$p.Kill() } catch { }
+        Log 'podman info did not return within 20 seconds; stopped it.'
+        return `$false
+    }
+    `$p.ExitCode -eq 0
+}
+
 function Wait-Podman {
     `$deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while (`$true) {
-        & `$podman info *> `$null
-        if (`$LASTEXITCODE -eq 0) { return `$true }
+        if (Test-PodmanAnswers) { return `$true }
         if ((Get-Date) -gt `$deadline) { return `$false }
         Start-Sleep -Seconds 3
     }

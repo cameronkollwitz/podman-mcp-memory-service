@@ -3,8 +3,9 @@
 [![check](https://github.com/cameronkollwitz/podman-mcp-memory-service/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/cameronkollwitz/podman-mcp-memory-service/actions/workflows/check.yml)
 
 A Podman compose stack that runs [doobidoo/mcp-memory-service](https://github.com/doobidoo/mcp-memory-service)
-12.1.1 on Windows, with a logon task that starts it after a reboot. It gives Claude Code a
-persistent memory server over MCP.
+on Windows, with a logon task that starts it after a reboot. It gives Claude Code a persistent
+memory server over MCP. The image tag is pinned in `compose.yaml`, and Dependabot proposes each new
+one.
 
 ## What runs
 
@@ -63,11 +64,26 @@ Podman has no daemon, so `restart: always` does not bring the containers back af
 waits for it to respond and runs `podman compose up -d`. Each run appends to
 `%LOCALAPPDATA%\mcp-memory-autostart.log`.
 
-After an unclean shutdown, a socket file left in `%TEMP%\podman` can stop Podman's API pipe from
-opening, and compose then fails with `open //./pipe/podman-machine-default: The system cannot find
-the file specified`. The task checks for the pipe and, when it is missing, removes that socket file
-and restarts the machine. Its result code is compose's exit code, 1 when Podman did not respond in
-time, or 2 when the pipe is still missing after the restart, so `-Status` shows a failed run.
+The task repairs three faults before it runs compose:
+
+- **A connection file on the wrong port.** Podman run from an MSIX-packaged app, such as the Claude
+  desktop app, writes `podman-connections.json` into the package's private copy of `%APPDATA%`, so
+  a change to the machine's SSH port never reaches the real file. The task rewrites the machine's
+  two connections to the port `podman machine inspect` reports, and leaves other connections alone.
+- **An SSH port Windows has reserved.** Hyper-V and WinNAT reserve port ranges at boot, and when
+  one covers the machine's SSH port, the machine reports itself running while every `podman`
+  command gets `connection refused`. When `podman info` does not answer within `-TimeoutSeconds`,
+  the task stops and starts the machine once, which lets Podman move SSH to a free port. Each
+  `podman info` call is stopped after 20 seconds, so a hung connection counts as no answer.
+- **A missing API pipe.** After an unclean shutdown, a socket file left in `%TEMP%\podman` can stop
+  the pipe from opening, and compose then fails with `open //./pipe/podman-machine-default: The
+  system cannot find the file specified`. The task removes that socket file and restarts the
+  machine.
+
+The result code is compose's exit code, 1 when Podman did not answer even after a restart, or 2
+when the pipe is still missing after its restart, so `-Status` shows a failed run. Either restart
+also stops containers that are already running, so a run with `-RunNow` can take the stack down
+for a minute or two.
 
 ```powershell
 .\mcp-memory-autostart.ps1 -Install -RunNow   # create the task and run it once
