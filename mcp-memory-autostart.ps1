@@ -10,10 +10,15 @@
     "podman compose up -d" in the stack folder. Output from each run is
     appended to a log file.
 
-    If the machine's API pipe is missing, the task removes the machine's API
-    socket file and restarts the machine before running compose. The task's
-    result code is compose's exit code, 1 when Podman did not respond in time,
-    or 2 when the pipe is still missing after the restart.
+    Before waiting, the task rewrites the port in podman-connections.json when
+    it differs from the machine's SSH port, which drifts when Podman was run
+    from an MSIX-packaged app such as the Claude desktop app.
+    If Podman does not answer within the timeout, the task stops and starts the
+    machine once, which lets Podman move its SSH port when Windows has reserved
+    the old one. If the machine's API pipe is missing, the task removes the
+    machine's API socket file and restarts the machine before running compose.
+    The task's result code is compose's exit code, 1 when Podman did not respond
+    after a restart, or 2 when the pipe is still missing after the restart.
 
 .EXAMPLE
     .\mcp-memory-autostart.ps1 -Install -StackPath 'D:\stacks\mcp-memory' -RunNow
@@ -82,10 +87,32 @@ function Wait-Podman {
     `$deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while (`$true) {
         & `$podman info *> `$null
-        if (`$LASTEXITCODE -eq 0) { return }
-        if ((Get-Date) -gt `$deadline) { Log 'Podman did not respond in time; giving up.'; exit 1 }
+        if (`$LASTEXITCODE -eq 0) { return `$true }
+        if ((Get-Date) -gt `$deadline) { return `$false }
         Start-Sleep -Seconds 3
     }
+}
+
+# The machine file keeps the SSH port and podman-connections.json keeps a copy
+# in each connection URI. Podman run from an MSIX-packaged app (the Claude
+# desktop app) writes the connections file into the package's private copy of
+# AppData, so a port change made there never reaches the real file, and every
+# process outside the package keeps dialing the old port.
+function Sync-ConnectionPort {
+    `$port = (& `$podman machine inspect --format '{{.SSHConfig.Port}}' 2>`$null) | Select-Object -First 1
+    `$file = Join-Path `$env:APPDATA 'containers\podman-connections.json'
+    if (-not `$port -or -not (Test-Path -LiteralPath `$file)) { return }
+    `$json = Get-Content -LiteralPath `$file -Raw
+    `$fixed = `$json -replace '@127\.0\.0\.1:\d+/', "@127.0.0.1:`$port/"
+    if (`$fixed -ne `$json) {
+        Log "Connection URIs did not match machine SSH port `$port; rewriting `$file."
+        Set-Content -LiteralPath `$file -Value `$fixed -NoNewline
+    }
+}
+
+function Restart-Machine {
+    & `$podman machine stop *>&1 | ForEach-Object { Log `$_ }
+    & `$podman machine start *>&1 | ForEach-Object { Log `$_ }
 }
 
 # podman info answers over SSH, so it succeeds while the named pipe that
@@ -102,7 +129,18 @@ function Test-Pipe {
 
 Log '--- logon start ---'
 & `$podman machine start *>&1 | ForEach-Object { Log `$_ }
-Wait-Podman
+
+# machine list reports the VM as running while Windows refuses its SSH port,
+# which happens when the port falls inside a range Hyper-V or WinNAT reserved
+# at boot. machine start skips a running VM, so only a stop and start lets
+# Podman detect the conflict and move SSH to a free port.
+Sync-ConnectionPort
+if (-not (Wait-Podman)) {
+    Log 'Podman did not answer over SSH in time; restarting the machine.'
+    Restart-Machine
+    Sync-ConnectionPort
+    if (-not (Wait-Podman)) { Log 'Podman did not answer after the restart; giving up.'; exit 1 }
+}
 
 `$pipe, `$sock = (& `$podman machine inspect --format '{{.ConnectionInfo.PodmanPipe.Path}}|{{.ConnectionInfo.PodmanSocket.Path}}') -split '\|'
 if (-not (Test-Pipe)) {
@@ -110,7 +148,7 @@ if (-not (Test-Pipe)) {
     & `$podman machine stop *>&1 | ForEach-Object { Log `$_ }
     Remove-Item -LiteralPath `$sock -Force -ErrorAction SilentlyContinue
     & `$podman machine start *>&1 | ForEach-Object { Log `$_ }
-    Wait-Podman
+    if (-not (Wait-Podman)) { Log 'Podman did not answer after the restart; giving up.'; exit 1 }
     if (-not (Test-Pipe)) { Log "API pipe `$pipe is still missing; giving up."; exit 2 }
 }
 
