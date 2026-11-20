@@ -80,10 +80,18 @@ The task repairs three faults before it runs compose:
   system cannot find the file specified`. The task removes that socket file and restarts the
   machine.
 
-The result code is compose's exit code, 1 when Podman did not answer even after a restart, or 2
-when the pipe is still missing after its restart, so `-Status` shows a failed run. Either restart
-also stops containers that are already running, so a run with `-RunNow` can take the stack down
-for a minute or two.
+A restart stops every container, so the task skips it while the MCP endpoint (`-ServicePort`, 8765
+by default) accepts connections, and logs that it did.
+
+| Result | Meaning |
+| --- | --- |
+| compose's exit code | The task reached `podman compose up -d`; 0 is a clean run |
+| 1 | Podman did not answer even after a restart |
+| 2 | The API pipe is still missing after its restart |
+| 3 | `podman machine inspect` returned no pipe or socket path |
+| 4 | A restart was needed but skipped, because the stack was serving |
+
+`-Status` shows the last result and the end of the log.
 
 ```powershell
 .\mcp-memory-autostart.ps1 -Install -RunNow   # create the task and run it once
@@ -91,8 +99,9 @@ for a minute or two.
 .\mcp-memory-autostart.ps1 -Uninstall         # remove the task
 ```
 
-`-StackPath` points the task at a different folder, and `-TimeoutSeconds` sets how long it waits
-for Podman (120 by default).
+`-StackPath` points the task at a different folder, `-TimeoutSeconds` sets how long it waits for
+Podman (120 by default, 10 to 1800), and `-ServicePort` names the endpoint port that marks the stack
+as serving.
 
 ## Troubleshooting
 

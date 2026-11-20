@@ -19,8 +19,12 @@
     machine once, which lets Podman move its SSH port when Windows has reserved
     the old one. If the machine's API pipe is missing, the task removes the
     machine's API socket file and restarts the machine before running compose.
+    Neither restart happens while -ServicePort accepts connections, since a
+    restart stops the running stack.
     The task's result code is compose's exit code, 1 when Podman did not respond
-    after a restart, or 2 when the pipe is still missing after the restart.
+    after a restart, 2 when the pipe is still missing after the restart, 3 when
+    podman machine inspect returned no pipe or socket path, or 4 when a restart
+    was skipped because the stack was serving.
 
 .EXAMPLE
     .\mcp-memory-autostart.ps1 -Install -StackPath 'D:\stacks\mcp-memory' -RunNow
@@ -50,7 +54,14 @@ param(
 
     # Seconds to wait for the Podman machine to respond before giving up.
     [Parameter(ParameterSetName = 'Install')]
+    [ValidateRange(10, 1800)]
     [int]$TimeoutSeconds = 120,
+
+    # Host port of the MCP endpoint. When it accepts a connection, the task
+    # does not restart the machine, since a restart stops the running stack.
+    [Parameter(ParameterSetName = 'Install')]
+    [ValidateRange(1, 65535)]
+    [int]$ServicePort = 8765,
 
     [string]$TaskName = 'Start mcp-memory'
 )
@@ -130,24 +141,73 @@ function Sync-ConnectionPort {
     `$file = Join-Path `$env:APPDATA 'containers\podman-connections.json'
     if (-not `$name -or `$port -notmatch '^\d+$' -or [int]`$port -le 0) { return }
     if (-not (Test-Path -LiteralPath `$file)) { return }
-    `$json = [IO.File]::ReadAllText(`$file)
-    try { `$conns = (`$json | ConvertFrom-Json).Connection.Connections } catch { return }
-    `$fixed = `$json
-    foreach (`$n in @(`$name, "`$name-root")) {
-        `$c = `$conns.`$n
-        if (-not `$c -or -not `$c.IsMachine) { continue }
-        `$uri = `$c.URI -replace '^(ssh://[^@/]+@127\.0\.0\.1:)\d+/', ('`${1}' + `$port + '/')
-        if (`$uri -ne `$c.URI) { `$fixed = `$fixed.Replace('"' + `$c.URI + '"', '"' + `$uri + '"') }
+
+    # Podman edits this file while holding a lock on the .lock file beside it.
+    # Windows byte-range locks are mandatory, so holding byte 0 of that file
+    # keeps Podman out for the read, the edit and the replace. The new content
+    # goes to a temporary file that replaces the original in one step, so a
+    # reader never sees a half-written file.
+    `$lockStream = `$null
+    for (`$i = 0; `$i -lt 20 -and -not `$lockStream; `$i++) {
+        try {
+            `$s = [IO.File]::Open("`$file.lock", 'OpenOrCreate', 'ReadWrite', 'ReadWrite')
+            try { `$s.Lock(0, 1); `$lockStream = `$s } catch { `$s.Close(); Start-Sleep -Milliseconds 250 }
+        }
+        catch { Start-Sleep -Milliseconds 250 }
     }
-    if (`$fixed -ne `$json) {
-        Log "Connection URIs for `$name did not match machine SSH port `$port; rewriting `$file."
-        [IO.File]::WriteAllText(`$file, `$fixed, (New-Object Text.UTF8Encoding `$false))
+    if (-not `$lockStream) { Log "Could not lock `$file.lock within 5 seconds; leaving the file as it is."; return }
+    try {
+        `$json = [IO.File]::ReadAllText(`$file)
+        try { `$conns = (`$json | ConvertFrom-Json).Connection.Connections } catch { return }
+        `$fixed = `$json
+        foreach (`$n in @(`$name, "`$name-root")) {
+            `$c = `$conns.`$n
+            if (-not `$c -or -not `$c.IsMachine) { continue }
+            `$uri = `$c.URI -replace '^(ssh://[^@/]+@127\.0\.0\.1:)\d+/', ('`${1}' + `$port + '/')
+            if (`$uri -ne `$c.URI) { `$fixed = `$fixed.Replace('"' + `$c.URI + '"', '"' + `$uri + '"') }
+        }
+        if (`$fixed -ne `$json) {
+            Log "Connection URIs for `$name did not match machine SSH port `$port; rewriting `$file."
+            `$tmp = "`$file.autostart.tmp"
+            try {
+                [IO.File]::WriteAllText(`$tmp, `$fixed, (New-Object Text.UTF8Encoding `$false))
+                # PowerShell passes `$null to a string parameter as an empty
+                # string, which Replace rejects; NullString passes a real null
+                # for "no backup file".
+                [IO.File]::Replace(`$tmp, `$file, [NullString]::Value)
+            }
+            catch {
+                Log "Could not replace `${file}: `$(`$_.Exception.Message)"
+                Remove-Item -LiteralPath `$tmp -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    finally {
+        `$lockStream.Unlock(0, 1)
+        `$lockStream.Close()
     }
 }
 
 function Restart-Machine {
     & `$podman machine stop *>&1 | ForEach-Object { Log `$_ }
     & `$podman machine start *>&1 | ForEach-Object { Log `$_ }
+}
+
+# A restart stops every container, so it is skipped while the MCP endpoint
+# accepts connections: the stack is already doing its job, and only the
+# Podman client path is broken.
+function Test-StackServing {
+    `$client = New-Object Net.Sockets.TcpClient
+    try { `$client.ConnectAsync('127.0.0.1', $ServicePort).Wait(2000) -and `$client.Connected }
+    catch { `$false }
+    finally { `$client.Close() }
+}
+
+function Skip-IfServing(`$reason) {
+    if (Test-StackServing) {
+        Log "`$reason, but port $ServicePort accepts connections; not restarting the running stack."
+        exit 4
+    }
 }
 
 # podman info answers over SSH, so it succeeds while the named pipe that
@@ -171,14 +231,21 @@ Log '--- logon start ---'
 # Podman detect the conflict and move SSH to a free port.
 Sync-ConnectionPort
 if (-not (Wait-Podman)) {
+    Skip-IfServing 'Podman did not answer over SSH in time'
     Log 'Podman did not answer over SSH in time; restarting the machine.'
     Restart-Machine
     Sync-ConnectionPort
     if (-not (Wait-Podman)) { Log 'Podman did not answer after the restart; giving up.'; exit 1 }
 }
 
-`$pipe, `$sock = (& `$podman machine inspect --format '{{.ConnectionInfo.PodmanPipe.Path}}|{{.ConnectionInfo.PodmanSocket.Path}}') -split '\|'
+`$pipe, `$sock = ((& `$podman machine inspect --format '{{.ConnectionInfo.PodmanPipe.Path}}|{{.ConnectionInfo.PodmanSocket.Path}}' 2>`$null) |
+    Select-Object -First 1) -split '\|'
+if (-not `$pipe -or -not `$sock -or `$pipe -like '*<no value>*' -or `$sock -like '*<no value>*') {
+    Log 'podman machine inspect returned no API pipe or socket path; cannot check the pipe.'
+    exit 3
+}
 if (-not (Test-Pipe)) {
+    Skip-IfServing "API pipe `$pipe is missing"
     Log "API pipe `$pipe is missing; removing `$sock and restarting the machine."
     & `$podman machine stop *>&1 | ForEach-Object { Log `$_ }
     Remove-Item -LiteralPath `$sock -Force -ErrorAction SilentlyContinue
