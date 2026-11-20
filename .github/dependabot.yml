@@ -1,6 +1,7 @@
 version: 2
 updates:
-  # Both services pin the same image tag, so one pull request bumps both.
+  # Both services pin the same image tag and digest, so one pull request
+  # updates both lines.
   - package-ecosystem: docker-compose
     directory: /
     schedule:

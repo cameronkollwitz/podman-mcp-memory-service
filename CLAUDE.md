@@ -8,7 +8,9 @@ once.
 
 ## What runs
 
-`compose.yaml` defines two containers from the same image, pinned by tag in both services.
+`compose.yaml` defines two containers from the same image, pinned by tag and digest in both
+services. Upstream deletes old version tags from Docker Hub, so a pull resolves the digest, which
+stays pullable after its tag is gone.
 
 | Container | Port | Reads | Serves |
 | --- | --- | --- | --- |
@@ -72,11 +74,11 @@ a memory, and read a live env file only for its variable names.
 The image is versioned by someone else, so what is remembered about its variables, commands or
 storage was true of some version. Read the version that is running: the image tag in
 `compose.yaml`, `podman exec mcp-memory memory --help`, or the upstream README at the matching tag.
-An image bump changes the tag in both services together, and the stack is brought up and checked
+An image bump changes the tag and digest in both services together, and the stack is brought up and checked
 with a `memory_search` call afterwards. Dependabot opens a weekly pull request when a new tag is
-published. The `check` workflow on that pull request only validates the compose file, so the
-branch is checked out, brought up with `podman compose up -d` and checked with `memory_search`
-before it is merged.
+published. The `check` workflow on that pull request validates the compose file, lints the
+autostart script and runs its Pester tests, and no job starts the image, so the branch is checked out, brought up with
+`podman compose up -d` and checked with `memory_search` before it is merged.
 
 ## Git
 

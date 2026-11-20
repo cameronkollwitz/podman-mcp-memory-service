@@ -21,10 +21,14 @@
     machine's API socket file and restarts the machine before running compose.
     Neither restart happens while -ServicePort accepts connections, since a
     restart stops the running stack.
-    The task's result code is compose's exit code, 1 when Podman did not respond
+    The run's result is compose's exit code, 1 when Podman did not respond
     after a restart, 2 when the pipe is still missing after the restart, 3 when
     podman machine inspect returned no pipe or socket path, or 4 when a restart
     was skipped because the stack was serving.
+
+    The task starts the shell through conhost --headless, so no console window
+    opens. conhost reports 0 to Task Scheduler for every run, so each run ends
+    by logging "result: <code>", and -Status reads the result from there.
 
 .EXAMPLE
     .\mcp-memory-autostart.ps1 -Install -StackPath 'D:\stacks\mcp-memory' -RunNow
@@ -33,7 +37,7 @@
     .\mcp-memory-autostart.ps1 -Status            # last run, result code, recent log lines
     .\mcp-memory-autostart.ps1 -Uninstall         # remove the task
 #>
-[CmdletBinding(DefaultParameterSetName = 'Status')]
+[CmdletBinding(DefaultParameterSetName = 'Status', SupportsShouldProcess)]
 param(
     [Parameter(ParameterSetName = 'Install', Mandatory)]
     [switch]$Install,
@@ -73,28 +77,46 @@ function Get-ExistingTask {
     Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 }
 
-switch ($PSCmdlet.ParameterSetName) {
+# Under conhost --headless, Task Scheduler records 0 for every run, so the
+# result comes from the last run in the log. A run with no result line is
+# still going or was stopped before it finished.
+function Get-LastRunResult {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return 'no log' }
+    $lines = @(Get-Content -LiteralPath $Path)
+    $start = -1
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        if ($lines[$i] -like '*--- logon start ---') { $start = $i; break }
+    }
+    if ($start -lt 0) { return 'none (running, or stopped before it finished)' }
+    $result = 'none (running, or stopped before it finished)'
+    foreach ($line in $lines[$start..($lines.Count - 1)]) {
+        if ($line -match '\sresult: (-?\d+)$') { $result = $Matches[1] }
+    }
+    $result
+}
 
-    'Install' {
-        $StackPath = (Resolve-Path $StackPath).Path
-        if (-not (Test-Path (Join-Path $StackPath 'compose.yaml')) -and
-            -not (Test-Path (Join-Path $StackPath 'docker-compose.yml'))) {
-            throw "No compose.yaml found in '$StackPath'. Pass -StackPath with the stack folder."
-        }
-
-        $podman = (Get-Command podman -ErrorAction SilentlyContinue).Source
-        if (-not $podman) { throw 'podman.exe not found on PATH.' }
-
-        $shell = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
-        if (-not $shell) { $shell = (Get-Command powershell).Source }
-
-        # The script the task runs. Paths are embedded as single-quoted literals.
-        $esc = { param($s) $s -replace "'", "''" }
-        $runScript = @"
+# Builds the script the logon task runs. It is a function so the tests can
+# generate the script and load its functions without registering anything.
+# Paths are embedded as single-quoted literals.
+function Get-RunScriptText {
+    param(
+        [string]$Podman,
+        [string]$LogPath,
+        [string]$StackPath,
+        [int]$TimeoutSeconds,
+        [int]$ServicePort
+    )
+    $esc = { param($s) $s -replace "'", "''" }
+    @"
 `$ErrorActionPreference = 'Continue'
-`$podman = '$(& $esc $podman)'
+`$podman = '$(& $esc $Podman)'
 `$log = '$(& $esc $LogPath)'
 function Log(`$m) { "`$(Get-Date -Format s)  `$m" | Add-Content -Path `$log }
+
+# The task runs under conhost --headless, which reports 0 to Task Scheduler
+# whatever the script returns, so -Status reads the result from this line.
+function Exit-Run(`$code) { Log "result: `$code"; exit `$code }
 
 # A call operator would wait on podman info for as long as SSH hangs, past
 # Wait-Podman's deadline and up to the task's execution limit. The process is
@@ -188,8 +210,11 @@ function Sync-ConnectionPort {
     }
 }
 
-function Restart-Machine {
+# -RemoveSocket deletes the API socket file between the stop and the start,
+# while nothing holds it. `$sock is set by the pipe check below.
+function Restart-Machine([switch]`$RemoveSocket) {
     & `$podman machine stop *>&1 | ForEach-Object { Log `$_ }
+    if (`$RemoveSocket) { Remove-Item -LiteralPath `$sock -Force -ErrorAction SilentlyContinue }
     & `$podman machine start *>&1 | ForEach-Object { Log `$_ }
 }
 
@@ -206,7 +231,7 @@ function Test-StackServing {
 function Skip-IfServing(`$reason) {
     if (Test-StackServing) {
         Log "`$reason, but port $ServicePort accepts connections; not restarting the running stack."
-        exit 4
+        Exit-Run 4
     }
 }
 
@@ -223,7 +248,11 @@ function Test-Pipe {
 }
 
 Log '--- logon start ---'
-& `$podman machine start *>&1 | ForEach-Object { Log `$_ }
+# machine start on a running machine prints an Error line and changes nothing,
+# which makes a healthy log read as a failure.
+`$state = (& `$podman machine inspect --format '{{.State}}' 2>`$null) | Select-Object -First 1
+if (`$state -eq 'running') { Log 'Machine is already running.' }
+else { & `$podman machine start *>&1 | ForEach-Object { Log `$_ } }
 
 # machine list reports the VM as running while Windows refuses its SSH port,
 # which happens when the port falls inside a range Hyper-V or WinNAT reserved
@@ -235,36 +264,64 @@ if (-not (Wait-Podman)) {
     Log 'Podman did not answer over SSH in time; restarting the machine.'
     Restart-Machine
     Sync-ConnectionPort
-    if (-not (Wait-Podman)) { Log 'Podman did not answer after the restart; giving up.'; exit 1 }
+    if (-not (Wait-Podman)) { Log 'Podman did not answer after the restart; giving up.'; Exit-Run 1 }
 }
 
 `$pipe, `$sock = ((& `$podman machine inspect --format '{{.ConnectionInfo.PodmanPipe.Path}}|{{.ConnectionInfo.PodmanSocket.Path}}' 2>`$null) |
     Select-Object -First 1) -split '\|'
 if (-not `$pipe -or -not `$sock -or `$pipe -like '*<no value>*' -or `$sock -like '*<no value>*') {
     Log 'podman machine inspect returned no API pipe or socket path; cannot check the pipe.'
-    exit 3
+    Exit-Run 3
 }
 if (-not (Test-Pipe)) {
     Skip-IfServing "API pipe `$pipe is missing"
     Log "API pipe `$pipe is missing; removing `$sock and restarting the machine."
-    & `$podman machine stop *>&1 | ForEach-Object { Log `$_ }
-    Remove-Item -LiteralPath `$sock -Force -ErrorAction SilentlyContinue
-    & `$podman machine start *>&1 | ForEach-Object { Log `$_ }
-    if (-not (Wait-Podman)) { Log 'Podman did not answer after the restart; giving up.'; exit 1 }
-    if (-not (Test-Pipe)) { Log "API pipe `$pipe is still missing; giving up."; exit 2 }
+    Restart-Machine -RemoveSocket
+    if (-not (Wait-Podman)) { Log 'Podman did not answer after the restart; giving up.'; Exit-Run 1 }
+    if (-not (Test-Pipe)) { Log "API pipe `$pipe is still missing; giving up."; Exit-Run 2 }
 }
 
 Set-Location -LiteralPath '$(& $esc $StackPath)'
 & `$podman compose up -d *>&1 | ForEach-Object { Log `$_ }
 `$code = `$LASTEXITCODE
 Log "compose exit code: `$code"
-exit `$code
+Exit-Run `$code
 "@
+}
+
+switch ($PSCmdlet.ParameterSetName) {
+
+    'Install' {
+        $StackPath = (Resolve-Path $StackPath).Path
+        if (-not (Test-Path (Join-Path $StackPath 'compose.yaml')) -and
+            -not (Test-Path (Join-Path $StackPath 'docker-compose.yml'))) {
+            throw "No compose.yaml found in '$StackPath'. Pass -StackPath with the stack folder."
+        }
+
+        $podman = (Get-Command podman -ErrorAction SilentlyContinue).Source
+        if (-not $podman) { throw 'podman.exe not found on PATH.' }
+
+        $shell = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+        if (-not $shell) { $shell = (Get-Command powershell).Source }
+
+        $runScript = Get-RunScriptText -Podman $podman -LogPath $LogPath -StackPath $StackPath `
+            -TimeoutSeconds $TimeoutSeconds -ServicePort $ServicePort
         # Encode the script so no path or quote can break the task's command line.
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($runScript))
 
-        $action = New-ScheduledTaskAction -Execute $shell `
-            -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encoded"
+        # An Interactive task opens a console window for the shell before
+        # -WindowStyle Hidden takes effect, and closing or typing into it
+        # interrupts the run. conhost --headless gives the shell a console with
+        # no window. It waits for the shell but always exits 0, which is why
+        # the run logs its own result.
+        $shellArgs = "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encoded"
+        $conhost = Join-Path $env:SystemRoot 'System32\conhost.exe'
+        $action = if (Test-Path -LiteralPath $conhost) {
+            New-ScheduledTaskAction -Execute $conhost -Argument "--headless `"$shell`" $shellArgs"
+        }
+        else {
+            New-ScheduledTaskAction -Execute $shell -Argument $shellArgs
+        }
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
         # A run can wait for Podman three times (first start, SSH restart, pipe
         # restart) and restart the machine twice before compose runs. The limit
@@ -275,6 +332,7 @@ exit `$code
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
             -StartWhenAvailable -ExecutionTimeLimit $limit
 
+        if (-not $PSCmdlet.ShouldProcess($TaskName, "Register a logon task for the stack in $StackPath")) { return }
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
             -Principal $principal -Settings $settings `
             -Description "Starts the Podman machine and the compose stack in $StackPath at logon." `
@@ -283,7 +341,7 @@ exit `$code
         Write-Host "Installed task '$TaskName' for $StackPath"
         Write-Host "Log file: $LogPath"
 
-        if ($RunNow) {
+        if ($RunNow -and $PSCmdlet.ShouldProcess($TaskName, 'Start the task now')) {
             Start-ScheduledTask -TaskName $TaskName
             Write-Host 'Task started. Check the log or run: podman ps'
         }
@@ -291,6 +349,7 @@ exit `$code
 
     'Uninstall' {
         if (Get-ExistingTask) {
+            if (-not $PSCmdlet.ShouldProcess($TaskName, 'Remove the logon task')) { return }
             Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
             Write-Host "Removed task '$TaskName'."
         }
@@ -308,7 +367,8 @@ exit `$code
             Task        = $TaskName
             State       = $task.State
             LastRun     = $info.LastRunTime
-            LastResult  = '0x{0:X}' -f $info.LastTaskResult
+            LastResult  = Get-LastRunResult -Path $LogPath
+            TaskResult  = '0x{0:X}' -f $info.LastTaskResult
             Description = $task.Description
             Log         = $LogPath
         } | Format-List

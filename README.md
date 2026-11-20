@@ -4,12 +4,14 @@
 
 A Podman compose stack that runs [doobidoo/mcp-memory-service](https://github.com/doobidoo/mcp-memory-service)
 on Windows, with a logon task that starts it after a reboot. It gives Claude Code a persistent
-memory server over MCP. The image tag is pinned in `compose.yaml`, and Dependabot proposes each new
-one.
+memory server over MCP. The image is pinned by tag and digest in `compose.yaml`, and Dependabot
+proposes each new version.
 
 ## What runs
 
-Both containers use the same image, pinned by tag in `compose.yaml`.
+Both containers use the same image, pinned by tag and digest in `compose.yaml`. Upstream deletes
+old version tags from Docker Hub, and the digest keeps the pinned image pullable after its tag is
+gone.
 
 | Container | Port | Env file | Purpose |
 | --- | --- | --- | --- |
@@ -91,7 +93,10 @@ by default) accepts connections, and logs that it did.
 | 3 | `podman machine inspect` returned no pipe or socket path |
 | 4 | A restart was needed but skipped, because the stack was serving |
 
-`-Status` shows the last result and the end of the log.
+The task starts PowerShell through `conhost.exe --headless`, so no console window opens at logon
+or on a manual run. conhost reports 0 to Task Scheduler whatever the run returns, so each run ends
+by logging `result: <code>`, and `-Status` shows that as `LastResult`. Task Scheduler's own code
+appears as `TaskResult`.
 
 ```powershell
 .\mcp-memory-autostart.ps1 -Install -RunNow   # create the task and run it once
@@ -103,6 +108,16 @@ by default) accepts connections, and logs that it did.
 Podman (120 by default, 10 to 1800), and `-ServicePort` names the endpoint port that marks the stack
 as serving.
 
+## Tests
+
+`tests/mcp-memory-autostart.Tests.ps1` covers the task's logic with Pester 5 on Windows. It loads
+the script's functions without registering a task or touching the Podman machine, and CI runs it
+on every push and pull request:
+
+```powershell
+Invoke-Pester -Path ./tests -Output Detailed
+```
+
 ## Troubleshooting
 
 ```powershell
@@ -111,7 +126,7 @@ podman logs mcp-memory --tail 50
 .\mcp-memory-autostart.ps1 -Status
 ```
 
-To upgrade, change the image tag in both services together, run `podman compose up -d`, and
+To upgrade, change the image tag and digest in both services together, run `podman compose up -d`, and
 confirm a search through the MCP server returns results.
 
 ## License
